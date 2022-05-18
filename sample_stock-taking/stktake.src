@@ -1,0 +1,706 @@
+'*****************************************************************************
+'***                                                                       ***
+'***    Product Name    : Sample Program for BHT                           ***
+'***    File Name       : stktake.src                                      ***
+'***                                                                       ***
+'***    Edition History                                                    ***
+'***    Version  Date      Comments                                        ***
+'***    -------  --------  ----------------------------------------------  ***
+'***    1.00.00  13/02/04  Translated from Japanese version                ***
+'***                                                                       ***
+'***    Copyright (C) 2013 DENSO WAVE INCORPORATED  All rights reserved.   ***
+'*****************************************************************************
+'+---------------------------------------------------------------------------+
+'|                                                                           |
+'| To those using this sample program                                        |
+'|                                                                           |
+'|  DENSO WAVE INCORPORATED retains the copyright to this source code,       |
+'|  but allows users to use it, in whole or in part, and make modifications  |
+'|  without prior permission of DENSO WAVE INCORPORATED.                     |
+'|  DENSO WAVE INCORPORATED shall not, however, be held responsible for any  |
+'|  damages arising from such use or modifications.                          |
+'|                                                                           |
+'+---------------------------------------------------------------------------+
+'+---------------------------------------------------------------------------+
+'|                                                                           |
+'|  Function: Initialize                                                     |
+'|                                                                           |
+'+---------------------------------------------------------------------------+
+    private Bhtmodel$
+    private MstFil$
+    private DatFil$
+    private M1$
+    private M2$
+    private SFM1$
+    private RcNum%
+    private tmp$
+    private Ter%
+    private MPage%
+    private PrCode$
+    private PrName$
+    private RSflg%
+    private DList%
+    private PRec%
+    private Ern%
+    private Page%
+    private RecNo%
+    private Cnt$
+    private RdBar$
+    private I$
+    private Lspc$
+    private J%
+    private WRec%
+    private Num$
+    private LastL%
+    private LstRow%
+    private LstRowAnk%
+    private NList%
+
+    MstFil$ = "MASTER.TXT"
+    DatFil$ = "STDATA.TXT"
+    M1$     = "m"             'M1 key
+    M2$     = "n"             'M2 key
+    SFM1$   = "l"             'SF+M1 key
+    
+    const StRow  = 1          
+    const StCol  = 1          
+    
+    const BarDev = 1          
+    const BarMax = 13         
+    const FilNo1 = 2          
+    const FilNo2 = 3          
+    const ComDev = 4          
+    const MaxRec = 999        
+
+
+'+---------------------------------------------------------------------------+
+'|                                                                           |
+'|  Function: Wait for reading barcode or key-in                             |
+'|              <in>  f.no%        file number of barcode device file        |
+'|                    bar$         read code                                 |
+'|                    max%         max number of digit for bar code          |
+'|                    esc$         list of escape keys                       |
+'|              <out> bar code data or key-in data                           |
+'|                                                                           |
+'|  Description:                                                             |
+'|    Wait for reading barcode or key-in.                                    |
+'|    When a bar code is read, returns the bar code data.                    |
+'|    When the ENT key is pressed,  returns the key-in data.                 |
+'|    When the key specified to escape key is pressed, returns the escape    |
+'|    key data.                                                              |
+'|                                                                           |
+'+---------------------------------------------------------------------------+
+    function inpbarkey$(f.no%, bar$, max%, esc$)
+
+        private .rt$
+        private len%
+        private .kb$
+
+        while 1
+            open "BAR:B" as #f.no% code bar$
+            wait 0,&h03     ' wait reading bar code or key-in
+            if loc(#f.no%) then
+                len% = loc(#f.no%)
+                if len% > max% then
+                    len% = max%
+                endif
+                .rt$ = input$(len%, #f.no%)
+                ' print .rt$;
+                inpbarkey$ = .rt$
+                close #f.no%
+                exit function
+            else
+                close #f.no%        
+                .rt$ = ""
+                .kb$ = input$(1)
+                while .kb$<>""
+                    if instr(esc$, .kb$) then   
+                        inpbarkey$ = .kb$       
+                        exit function
+                    endif
+                    select .kb$
+                    case chr$(13)
+                        inpbarkey$ = .rt$
+                        beep                    
+                        exit function
+                    case chr$(8)        
+                        if len(.rt$) then
+                            print chr$(8);      
+                            .rt$ = left$(.rt$, len(.rt$)-1)
+                        endif
+                    case chr$(24)       
+                        while len(.rt$)       
+                            print chr$(8);
+                            .rt$ = left$(.rt$, len(.rt$)-1)
+                        wend
+                    case else
+                        if len(.rt$)<max% then
+                            if instr("1234567890",.kb$)>0 then  
+                                print .kb$;        
+                                beep 1,1,1,1       
+                                .rt$ = .rt$ + .kb$
+                            endif
+                        else
+                            beep 1,1,1,0    
+                        endif
+                    end select
+                    if .rt$="" then   
+                        .kb$ = ""
+                    else
+                        .kb$ = input$(1)  
+                        
+                    endif
+                wend
+            endif
+        wend
+    end function
+
+    
+'+---------------------------------------------------------------------------+
+'|                                                                           |
+'|  Function: Menu                                                           |
+'|                                                                           |
+'+---------------------------------------------------------------------------+
+    key 34,"BL10"
+    out &h6080,1                   
+Main:
+    cls
+    gosub SetLstRow:
+    gosub DispMenu:
+    
+    key 30,"TRG"
+    key 31,M2$
+
+    wait 0,1
+    I$=inkey$
+    beep 1,1,1,1
+    select I$
+        case "1":                  
+            goto BarRd:
+        case "2":                  
+            RSflg%=1               
+            goto Trns:
+        case "3":                  
+            goto DatLst:
+        case "4":                  
+            RSflg%=2               
+            goto Trns:
+    end select
+    goto Main:
+
+'+---------------------------------------------------------------------------+
+'|                                                                           |
+'|  Function: Stock-take                                                     |
+'|                                                                           |
+'|  Description:                                                             |
+'|   - Wait reading bar code or key-in.                                      |
+'|     Display a product name by referring to the master file.               |
+'|   - Wait key-in the quantity.                                             |
+'|   - Write the bar code data and quantity to the file.                     |
+'|                                                                           |
+'+---------------------------------------------------------------------------+
+
+BarRd:
+    gosub DispBar:
+    gosub FileOpn:
+
+    RcNum%=lof(#FilNo2) +1         
+    locate StCol,StRow+6
+
+Loop1:
+    if RcNum% > MaxRec then        
+       beep 3,3,3
+       gosub DispFiF:              
+       timea=30
+       wait 0,&h10
+       close #FilNo2
+       goto Main:
+    end if
+    
+    tmp$ = inpbarkey$(BarDev,"A:A",BarMax,M2$)    
+    
+    if tmp$=M2$ then               
+        beep 1,1,1,1
+        close #FilNo2
+        goto Main: 
+    endif
+    
+    if len(tmp$)<BarMax then       
+        beep 3,3,3,1
+        locate StCol,StRow+2
+        '      1234567890123456
+        print "Input data error"
+        timea=30
+        wait 0,&h10
+        goto ErsBar:
+    endif
+
+    gosub ClsCon:
+    locate StCol,StRow+2
+    print  " "+tmp$                
+    
+    gosub MstSrch:
+    RdBar$=tmp$                    
+
+    locate StCol,csrlin
+    print  "qty :_";
+    locate pos(0)-1,csrlin
+    tmp$ = inpbarkey$(BarDev,"M",3,M2$)       
+    if tmp$="" then                
+        tmp$="1"
+        print tmp$;
+    endif
+
+    if tmp$=M2$ then               
+        beep 1,1,1,1
+        close #FilNo2
+        goto Main: 
+    endif
+    
+    beep
+    Cnt$=right$("  "+tmp$, 3)      
+    Num$=right$("00"+right$(str$(RcNum%),len(str$(RcNum%))-1),3) 
+    
+    put #FilNo2,RcNum%             
+    RcNum% = RcNum%+1              
+
+ErsBar:
+    locate StCol,StRow+2
+    print  "                ";     
+    locate StCol,csrlin
+    print  ">";
+    goto Loop1:
+
+'+---------------------------------------------------------------------------+
+'|                                                                           |
+'|  Function: Send data and receive master file                              |
+'|                                                                           |
+'|  Description:                                                             |
+'|   - Send and receive file.                                                |
+'|       when RSflg% =1, sending data                                        |
+'|       when RSflg% =2, receiving master file                               |
+'|                                                                           |
+'+---------------------------------------------------------------------------+
+Trns:
+    on RSflg% gosub DispDat, DispMst    
+    key 30,M1$
+    Key 31,M2$
+
+Loop2:
+    wait 0,1
+    I$=inkey$
+
+    select I$
+        case M2$:                  
+            beep 1,1,1,1
+            goto Main:
+        case M1$:                  
+            beep 1,1,1,1
+            goto StTrs:
+    end select
+
+    goto Loop2:
+    
+StTrs:
+    key 31,chr$(&H18)              
+    gosub DispTrs:
+
+    '*** Select the protocol
+'   out &h6060,0                   ' BHT protocol
+'   out &h6060,2                   ' BHT-Ir protocol
+    out &h6060,3                   ' Ymodem protocol, recommended
+    open "COM1:115200" as #ComDev
+
+    power cont                     
+    Ter%=0
+    
+    on error goto TrsErr:
+    if RSflg%=1 then               
+        xfile DatFil$,"SP"
+    else
+        xfile MstFil$,"RSP"
+    endif
+    close #ComDev
+    on error goto 0
+    
+    if Ter%=1 then                 ' transfer error
+        beep 3,3,3
+        gosub DispTer:
+        timea=20
+        wait 0,&h10
+        power 1800
+        goto Trns:
+    endif
+
+    if Ter%=2 then                 ' transfer aborted
+        beep 3,3,1
+        gosub DispAbt:
+        timea=10
+        wait 0,&h10
+        power 1800
+        goto Trns:
+    endif
+    
+    if Ter%=3 then                 ' the file is empty
+        beep 3,3,3
+        gosub DispFnf:
+        timea=20
+        wait 0,&h10
+        power 1800
+        goto Main:
+    endif
+    
+    if RSflg%=1 then
+        kill DatFil$               ' delete the file after sending
+    endif
+
+    gosub DispTed:                 ' transfer completed
+    beep 10
+    timea=10
+    wait 0,&h10
+    goto Main:
+
+'+---------------------------------------------------------------------------+
+'|                                                                           |
+'|  Function: Check stock-taking data                                        |
+'|                                                                           |
+'|  Description:                                                             |
+'|   - List bar code data and quantity.                                      |
+'+---------------------------------------------------------------------------+
+DatLst:
+    key 30,M1$
+    key 33,SFM1$
+    
+    gosub DispLst:
+    gosub FileOpn:
+    WRec%=lof(#FilNo2)                  
+    
+    if WRec%=0 then                     
+        beep 3,3,3
+        gosub DispFnf:
+        timea=20
+        wait 0,&h10
+        power 1800
+        close #FilNo2
+        goto Main:
+    endif
+
+    NList% = (LstRowAnk%-4) / 2
+
+    MPage%=(WRec%-1) / NList%          
+    LastL% = (WRec%-1) mod NList% +1   
+    Page%=0
+
+LstDis:
+    DList%= NList%-1                   
+    PRec%=Page%* NList% +1             
+
+    if MPage%>0 then                   
+        screen 1,1
+        locate StCol,LstRow%
+        '            1234567890123456
+        print Lspc$+"[M1]next [SF+M1]prev";
+    screen  ,0
+    endif
+ 
+    if Page%=MPage% then               
+        DList%=LastL%-1                
+    endif
+    
+    for J%=0 to DList%                 
+        get #FilNo2,PRec%+J%
+        screen 0,0
+        locate StCol,StRow+2+J%*2
+        print Num$;"          ..."
+        print RdBar$+Cnt$;     
+    next J%
+
+    if Page%=MPage% then               
+        for J%=(DList%+1) to NList%-1  
+            screen 0,0
+            locate StCol,StRow+2+J%*2
+            print "                "
+            print "                ";
+        next J%
+    endif
+    
+
+KyWt:
+    wait 0,1
+    I$=inkey$
+    if I$="" then goto KyWt: endif
+
+    if I$=SFM1$ then                   
+        beep 1,1,1,1
+        Page%=Page%-1
+        if Page%<0 then Page%=0 endif
+    endif
+
+    if I$=M1$ then                     
+        beep 1,1,1,1
+        Page%=Page%+1
+        if Page%>MPage% then Page%=MPage% endif
+    endif
+
+    if I$=M2$ then                      
+        beep 1,1,1,1
+        close #FilNo2
+        goto Main:
+    endif
+    goto LstDis:
+
+'+---------------------------------------------------------------------------+
+'|                                                                           |
+'|  Function: Refer the master file                                          |
+'|                                                                           |
+'|  Description:                                                             |
+'|   - Get the product name by referring the master file.                    |
+'+---------------------------------------------------------------------------+
+MstSrch:
+    open MstFil$ as #FilNo1
+    field #FilNo1, 13 as PrCode$, 16 as PrName$
+    
+    RecNo%=search(#FilNo1, PrCode$, tmp$)         
+    
+    if RecNo%=0 then                              
+        locate StCol, csrlin
+        print  "    ŠY“–‚È‚µ    "
+        close #FilNo1
+        return
+    endif
+    
+    get #FilNo1, RecNo%
+    locate StCol, csrlin
+    
+    PrName$ = left$(PrName$+"                ",16)
+    print  PrName$
+    
+    close #FilNo1
+    return
+
+'+---------------------------------------------------------------------------+
+'|                                                                           |
+'|  Funcrion: Open data file                                                 |
+'|                                                                           |
+'|  Description:                                                             |
+'|   - file format                                                           |
+'|     record number(3 digits)|bar code data(13 digits)|quantity(3 digits)   |
+'|     0011234567890123123                                                   |
+'|                                                                           |
+'+---------------------------------------------------------------------------+
+FileOpn:
+    open DatFil$ as #FilNo2 record MaxRec
+    field #FilNo2, 3 as Num$, 13 as RdBar$, 3 as Cnt$
+    return
+
+'+---------------------------------------------------------------------------+
+'|                                                                           |
+'|  Function: Get the bottom line                                            |
+'|                                                                           |
+'+---------------------------------------------------------------------------+
+SetLstRow:
+    on error goto SetLstRwE:
+    screen 1                    ' Kanji mode
+    for J% = 0 to 1000
+        locate ,StRow + J%
+    next J%
+    on error goto SetLstRwEa:
+    screen 0                    ' ANK mode
+    for J% = 0 to 1000
+        locate ,StRow + J%
+    next J%
+    on error goto 0
+    return
+
+SetLstRwE:
+    LstRow% = StRow + (J% - 1)
+    J% = 1000
+    resume next
+SetLstRwEa:
+    LstRowAnk% = StRow + (J% - 1)
+    J% = 1000
+    resume next
+
+
+'+---------------------------------------------------------------------------+
+'|                                                                           |
+'|  Function: Display                                                        |
+'|                                                                           |
+'+---------------------------------------------------------------------------+
+DispMenu:
+    cls
+    gosub SetLstRow:
+    screen 1,1
+    locate StCol,StRow
+    '       1234567890123456
+    print  "    * Menu *    "
+    screen  ,0
+    locate StCol,StRow+2
+    print  "1:Take  2:Send  "
+    locate StCol,StRow+4
+    print  "3:Check 4:Master"
+    locate StCol,LstRow%
+    screen  ,1
+    print  ">select [1]-[4] ";
+    screen  ,0
+    
+    return
+
+DispBar:
+    cls
+    screen 1,1
+    locate StCol,StRow
+    '       1234567890123456
+    print  " Taking[M2:MENU]"
+    screen  ,0
+    locate StCol,StRow+2
+    print  "Read bar code.  "
+    locate StCol,LstRow%
+    screen  ,1
+    print  "         M2:MENU";
+    screen  ,0
+    return
+
+DispDat:
+    cls
+    screen 1,1
+    locate StCol,StRow
+    '       1234567890123456
+    print  " Send data file "
+    screen  ,0
+    locate StCol,StRow+2
+    print  "Put BHT on      "
+    locate StCol,StRow+4
+    print  "comm unit.      "
+    locate StCol,LstRow%
+    screen  ,1
+    print  "M1:START M2:MENU";
+    screen  ,0
+    return
+    
+DispTrs:
+    gosub ClsCon:
+    locate StCol,StRow+2
+    screen  ,0
+    print  "                "
+    locate StCol,StRow+3
+    print  " Transferring.. "
+    locate StCol,LstRow%
+    screen  ,1
+    print  "        M2:Abort";
+    screen  ,0
+    return
+
+DispTer:
+    gosub ClsCon:
+    locate StCol,StRow+2
+    screen  ,0
+    locate StCol,StRow+2
+    print  "                "
+    locate StCol,StRow+4
+    print  " Transfer error "
+    return
+
+DispAbt:
+    gosub ClsCon:
+    screen  ,0
+    locate StCol,StRow+2
+    print  "                "
+    locate StCol,StRow+4
+    print  " Aborted.       "
+    return
+
+DispFnf:
+    gosub ClsCon:
+    screen  ,0
+    locate StCol,StRow+2
+    print  " No file exists."
+    return
+
+DispTed:
+    gosub ClsCon:
+    screen  ,0
+    locate StCol,StRow+2
+    print  "                "
+    locate StCol,StRow+3
+    print  "   Completed    "
+    locate StCol,LstRow%
+    screen  ,1
+    print  "        M2:Abort";
+    screen  ,0
+    return
+
+DispMst:
+    cls
+    screen 1,1
+    locate StCol,StRow
+    '       1234567890123456
+    print  " Get master file"
+    screen  ,0
+    locate StCol,StRow+2
+    print  "Put BHT on      "
+    locate StCol,StRow+4
+    print  " comm unit.     "
+    locate StCol,LstRow%
+    screen  ,1
+    print  "M1:START M2:MENU";
+    screen  ,0
+    return
+
+DispLst:
+    cls
+    screen 1,1
+    locate StCol,StRow
+    '       1234567890123456
+    print  " Check [M2:MENU]"
+    locate StCol,LstRow%
+    screen  ,1
+    print  "         M2:MENU";
+    screen  ,0
+    return
+
+DispFiF:
+    gosub ClsCon:
+    screen 1,0
+    locate StCol,StRow+2
+    print  "The data file is"
+    locate StCol,StRow+4
+    print  "full.           "
+    locate StCol,StRow+6
+    print  "Please send it. ";
+    return
+    
+ClsCon:
+    screen 1,0
+    for J%=(StRow+2) to LstRow%
+        locate StCol,J%
+        '      1234567890123456
+        print  "                ";
+    next J%
+    return
+
+'+---------------------------------------------------------------------------+
+'|                                                                           |
+'|  Function: Transfer error                                                 |
+'|                                                                           |
+'+---------------------------------------------------------------------------+
+TrsErr:
+    Ern% = err
+    
+    select Ern%
+        case &H46        'communication error
+            Ter%=1
+        case &H47        'aborted by [C] key
+            Ter%=2
+        case &H48        'aborted by [C] key
+            Ter%=1
+        case &H35        'can't find file
+            Ter%=3
+        case else
+            on error goto 0
+    end select
+
+    resume next
+
+    end
+
